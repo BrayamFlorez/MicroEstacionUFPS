@@ -7,6 +7,7 @@
 #include <Adafruit_Sensor.h>
 #include <Adafruit_AHTX0.h>
 #include <Adafruit_BMP280.h>
+#include "time.h"
 
 //DEFINIMOS VARIABLES GLOBALES
 
@@ -17,13 +18,17 @@
 #define AWS_IOT_PUBLISH_TOPIC   "ufpsSensorDataCloud/public"
 #define AWS_IOT_SUBSCRIBE_TOPIC "ufpsSensorDataCloud/subscribe"
 
+
 float temperatureAHT;
 float humidityAHT;
 float temperatureBMP;
 float pressure;
 float altitudeBMP;
+const char* ntpServer = "pool.ntp.org";
+const long  gmtOffset_sec = 3600;
+const int   daylightOffset_sec = 3600;
 String timestamp;
-String postalcode="541010"; //actualizas tu codigo postal para definir la ciudad que se monitoreará.
+String codigoPostal = "541010";
 
 //INICIALIZAMOS SENSORES
 
@@ -42,26 +47,27 @@ void setup() {
   neogps.begin(9600, SERIAL_8N1, RXD2, TXD2);
   connectWiFi();
   connectAWS();  
-  
+
+  //OBTENEMOS FECHA Y HORA
+  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+  printLocalTime();
+
   // NOS SUBSCRIBIMOS A NUESTRO TOPICO
   client.subscribe(AWS_IOT_SUBSCRIBE_TOPIC);
-  Serial.println("Te has subscrito");
+
   // CREAMOS CONTROLADOR DE MENSAJES
   client.onMessage(messageHandler);
-  Serial.println("Se ha creado el controlador de mensajes");
-  //CONFIGURACION DE SENSOR AHT20 DE TEMPERATURA Y HUMEDAD
+
+  //CONFIGURACION DE SENSOR AHT20 DE TEMPERTURA Y HUMEDAD
   if (!aht20.begin()) {
     Serial.println("No se pudo encontrar el sensor AHT20. Revisa la conexión.");
     while (1);
-  }else{
-  Serial.println("Se ha verificado el estado del AHT20");
   }
+
   if (!bmp280.begin(0x76)) { // Cambia a 0x77 si tu sensor está configurado en esa dirección
     Serial.println("No se pudo encontrar el sensor BMP280. Revisa la conexión.");
     while (1);
-  }else{
-  Serial.println("Se ha verificado el estado del BMP280");
-  }     
+  }      
 
 }
 
@@ -72,7 +78,8 @@ void messageHandler(String &topic, String &payload) {
 
 void loop() {
   
-  delay(15000);//configura el tiempo entre medidas
+  // ENVIAMOS Y RECIBIMOS PAQUETES
+  client.loop();
 
   // Obtener el tiempo del GPS si está disponible
   if (gps.time.isValid() && gps.date.isValid()) {
@@ -113,9 +120,6 @@ void loop() {
   timestamp = String(anio) + "-" + formatoDosDigitos(mes) + "-" + formatoDosDigitos(dia) + " ";
   timestamp += formatoDosDigitos(horaUTC) + ":" + formatoDosDigitos(minuto) + ":" + formatoDosDigitos(segundo);
 }
-  
-  // ENVIAMOS Y RECIBIMOS PAQUETES
-  client.loop();
 
   //INICIAMOS LA MEDICION DE TEMPERATURA,HUMEDAD, ALTITUD Y PRESION ATMOSFERICA 
   
@@ -155,9 +159,8 @@ void loop() {
 
       if (gps.location.isValid() == 1) {
         // Rellenar los datos en el objeto JSON
-        
         jsonDoc["Timestamp"] = timestamp;
-        jsonDoc["cpCity"] = postalcode;
+        jsonDoc["cpCity"] = codigoPostal;
         jsonDoc["Temperature1"] = temperatureAHT;
         jsonDoc["Humidity"] = humidityAHT;
         jsonDoc["Pressure"] = pressure;
@@ -168,10 +171,10 @@ void loop() {
         jsonDoc["Speed"] = gps.speed.kmph();
         jsonDoc["Satellites"] = gps.satellites.value();
         jsonDoc["Altitude2"] = gps.altitude.meters();
-        
+        jsonDoc["Date"] = String(gps.date.day()) + "/" + String(gps.date.month()) + "/" + String(gps.date.year());
+        jsonDoc["Time"] = String(gps.time.hour()) + ":" + String(gps.time.minute()) + ":" + String(gps.time.second());
+
       } else {
-        jsonDoc["Timestamp"] = "0";
-        jsonDoc["cpCity"] = postalcode;
         jsonDoc["Temperature1"] = temperatureAHT;
         jsonDoc["Humidity"] = humidityAHT;
         jsonDoc["Pressure"] = pressure;
@@ -182,7 +185,10 @@ void loop() {
         jsonDoc["Speed"] = gps.speed.kmph();
         jsonDoc["Satellites"] = gps.satellites.value();
         jsonDoc["Altitude2"] = gps.altitude.meters();
-        Serial.println("Gps sin conexion, espera a que se realice la conexion a los satelites...");
+        jsonDoc["Date"] = String(gps.date.day()) + "/" + String(gps.date.month()) + "/" + String(gps.date.year());
+        jsonDoc["Time"] = String(gps.time.hour()) + ":" + String(gps.time.minute()) + ":" + String(gps.time.second());
+        jsonDoc["Error"] = "Sin señal GPS";
+        printLocalTime();
       }
 
       // Convertir el objeto JSON a una cadena
@@ -191,16 +197,25 @@ void loop() {
 
       // Imprimir el JSON por el monitor serie
       Serial.println(jsonString);
-      client.publish(AWS_IOT_PUBLISH_TOPIC, jsonString);
 
-      if (gps.location.isValid() == 1 && timestamp != "") {
+      if (gps.location.isValid() == 1) {
         // PUBLICAMOS NUESTRO JSON EN EL TOPIC DE PUBLICACION
          client.publish(AWS_IOT_PUBLISH_TOPIC, jsonString);
         } else {
-          Serial.println("Los datos aun no estan preparados para ser subidos a la nube");
       }      
     }
   }  
+  delay(10000);// no usar mas de 10000 milisegundos de pausa
+}
+
+void printLocalTime()
+{
+  struct tm timeinfo;
+  if(!getLocalTime(&timeinfo)){
+    Serial.println("Failed to obtain time");
+    return;
+  }
+  Serial.println(&timeinfo, "%A, %B %d %Y %H:%M:%S");
 }
 
 int diasEnMes(int mes, int anio) {
@@ -224,7 +239,5 @@ String formatoDosDigitos(int numero) {
     return String(numero);
   }
 }
-
-
 
 
